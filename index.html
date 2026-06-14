@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>名刺管理</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        body { background-color: #f8fafc; overflow: hidden; }
+        .animate-spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .progress-bar { transition: width 0.3s ease; }
+        .full-height { height: 100dvh; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useRef, useEffect } = React;
+
+        const GAS_URL = "https://script.google.com/macros/s/AKfycbygJ7ryo6Lui9UubFUZJrHPz0yqWBTy2qGCidatW2za8Ze3rpLLSPHQuwvXueJ3cZKb/exec";
+
+        function App() {
+            const [step, setStep] = useState('upload');
+            const [queue, setQueue] = useState([]);
+            const [currentIndex, setCurrentIndex] = useState(-1);
+            const fileInputRef = useRef(null);
+
+            const handleFileUpload = (e) => {
+                const files = Array.from(e.target.files);
+                if (files.length === 0) return;
+                const newQueue = files.map((file, index) => ({
+                    id: Date.now() + index,
+                    file,
+                    status: 'waiting',
+                    data: null,
+                    preview: URL.createObjectURL(file)
+                }));
+                setQueue(newQueue);
+                setStep('processing');
+                setCurrentIndex(0);
+            };
+
+            useEffect(() => {
+                if (step === 'processing' && currentIndex >= 0 && currentIndex < queue.length) {
+                    processItem(currentIndex);
+                } else if (currentIndex >= queue.length && queue.length > 0) {
+                    setStep('done');
+                }
+            }, [currentIndex, step]);
+
+            const processItem = async (index) => {
+                const item = queue[index];
+                if (item.status !== 'waiting') return;
+
+                updateItemStatus(index, 'analyzing');
+                try {
+                    const base64 = await fileToBase64(item.file);
+
+                    const response = await fetch(GAS_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            imageBase64: base64.split(',')[1],
+                            mimeType: item.file.type,
+                            fileName: item.file.name
+                        })
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        updateItemStatus(index, 'success', result.data);
+                    } else {
+                        throw new Error(result.error || '不明なエラー');
+                    }
+
+                } catch (error) {
+                    console.error("Processing error:", error);
+                    updateItemStatus(index, 'error');
+                }
+
+                setTimeout(() => setCurrentIndex(prev => prev + 1), 500);
+            };
+
+            const updateItemStatus = (index, status, data = null) => {
+                setQueue(prev => {
+                    const next = [...prev];
+                    next[index] = { ...next[index], status, data: data || next[index].data };
+                    return next;
+                });
+            };
+
+            const fileToBase64 = (file) => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = error => reject(error);
+            });
+
+            const successCount = queue.filter(i => i.status === 'success').length;
+            const progress = queue.length > 0 ? Math.round((currentIndex / queue.length) * 100) : 0;
+
+            return (
+                <div className="max-w-md mx-auto full-height flex flex-col font-sans p-4">
+                    <header className="py-4 flex justify-between items-center shrink-0">
+                        <h1 className="text-xl font-bold text-indigo-600 flex items-center gap-2">
+                            <i className="fas fa-layer-group"></i> 名刺管理
+                        </h1>
+                        {step === 'processing' && (
+                            <span className="text-xs font-bold bg-indigo-100 text-indigo-600 px-3 py-1 rounded-full">
+                                {currentIndex + 1} / {queue.length}
+                            </span>
+                        )}
+                    </header>
+
+                    <main className="flex-1 flex flex-col justify-center min-h-0">
+                        {step === 'upload' && (
+                            <div className="space-y-6">
+                                <div
+                                    onClick={() => fileInputRef.current.click()}
+                                    className="aspect-[4/3] bg-white border-2 border-dashed border-indigo-200 rounded-3xl flex flex-col items-center justify-center gap-4 cursor-pointer hover:bg-indigo-50 transition-all active:scale-95 mx-2 shadow-sm"
+                                >
+                                    <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center">
+                                        <i className="fas fa-camera text-2xl"></i>
+                                    </div>
+                                    <p className="font-bold text-slate-600">名刺を読み取る</p>
+                                    <p className="text-xs text-slate-400">複数枚まとめて選択OK</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {step === 'processing' && (
+                            <div className="h-full flex flex-col space-y-4 min-h-0">
+                                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 shrink-0">
+                                    <div className="flex justify-between text-sm font-bold mb-2">
+                                        <span>処理中...</span>
+                                        <span>{progress}%</span>
+                                    </div>
+                                    <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                        <div className="bg-indigo-600 h-full progress-bar" style={{ width: `${progress}%` }}></div>
+                                    </div>
+                                </div>
+
+                                <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                                    {queue.map((item, idx) => (
+                                        <div key={item.id} className={`p-3 rounded-xl border flex items-center gap-3 transition-all ${
+                                            idx === currentIndex ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-100' :
+                                            item.status === 'success' ? 'bg-emerald-50 border-emerald-100 opacity-70' : 'bg-white border-slate-100'
+                                        }`}>
+                                            <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-200 flex-shrink-0">
+                                                <img src={item.preview} className="w-full h-full object-cover" alt="" />
+                                            </div>
+                                            <div className="flex-1 min-w-0 text-sm">
+                                                <p className="font-bold truncate">{item.data?.name || item.file.name}</p>
+                                                <p className="text-xs text-slate-500 truncate">{item.data?.company || '処理中...'}</p>
+                                            </div>
+                                            <div className="text-lg flex-shrink-0">
+                                                {item.status === 'analyzing' && <i className="fas fa-brain text-indigo-400 animate-pulse"></i>}
+                                                {item.status === 'success'   && <i className="fas fa-check-circle text-emerald-500"></i>}
+                                                {item.status === 'error'     && <i className="fas fa-exclamation-circle text-red-500"></i>}
+                                                {item.status === 'waiting'   && <i className="fas fa-clock text-slate-200"></i>}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {step === 'done' && (
+                            <div className="flex flex-col items-center text-center gap-6">
+                                <div className="w-24 h-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-4xl">
+                                    <i className="fas fa-check-double"></i>
+                                </div>
+                                <div className="px-4">
+                                    <h2 className="text-2xl font-bold text-slate-800">保存完了！</h2>
+                                    <p className="text-slate-500 mt-2">{successCount} 枚の名刺をシートに追加しました。</p>
+                                    {queue.some(i => i.status === 'error') && (
+                                        <p className="text-red-400 text-sm mt-1">
+                                            {queue.filter(i => i.status === 'error').length} 枚が失敗しました
+                                        </p>
+                                    )}
+                                </div>
+                                <button
+                                    onClick={() => { setStep('upload'); setQueue([]); setCurrentIndex(-1); }}
+                                    className="w-full max-w-xs py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-200 active:scale-95 transition-all"
+                                >
+                                    さらに追加する
+                                </button>
+                            </div>
+                        )}
+                    </main>
+
+                    <footer className="py-4 text-center shrink-0">
+                        <p className="text-xs text-slate-300">名刺管理アプリ</p>
+                    </footer>
+
+                    <input type="file" accept="image/*" multiple ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
