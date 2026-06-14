@@ -11,15 +11,12 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         body { background-color: #f8fafc; overflow: hidden; }
-        .animate-spin { animation: spin 1s linear infinite; }
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        .progress-bar { transition: width 0.3s ease; }
         .full-height { height: 100dvh; }
+        .progress-bar { transition: width 0.3s ease; }
     </style>
 </head>
 <body>
     <div id="root"></div>
-
     <script type="text/babel">
         const { useState, useRef, useEffect } = React;
 
@@ -57,28 +54,34 @@
             const processItem = async (index) => {
                 const item = queue[index];
                 if (item.status !== 'waiting') return;
-
                 updateItemStatus(index, 'analyzing');
+
                 try {
                     const base64 = await fileToBase64(item.file);
+                    const imageBase64 = base64.split(',')[1];
 
-                    // no-corsで送信（GASのCORS制限を回避）
-                    // レスポンスは読めないが、GAS側で処理は完了する
-                    await fetch(GAS_URL, {
-                        method: 'POST',
-                        mode: 'no-cors',
-                        body: JSON.stringify({
-                            imageBase64: base64.split(',')[1],
-                            mimeType: item.file.type,
-                            fileName: item.file.name
-                        })
+                    // GETパラメータとして送信（CORSを回避）
+                    const params = new URLSearchParams({
+                        imageBase64: imageBase64,
+                        mimeType: item.file.type,
+                        fileName: item.file.name
                     });
 
-                    // no-corsではレスポンスが読めないので送信完了＝成功とみなす
-                    updateItemStatus(index, 'success');
+                    const response = await fetch(`${GAS_URL}?${params.toString()}`, {
+                        method: 'GET',
+                        redirect: 'follow'
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        updateItemStatus(index, 'success', result.data);
+                    } else {
+                        throw new Error(result.error || '不明なエラー');
+                    }
 
                 } catch (error) {
-                    console.error("Processing error:", error);
+                    console.error("Error:", error);
                     updateItemStatus(index, 'error');
                 }
 
@@ -97,7 +100,7 @@
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = () => resolve(reader.result);
-                reader.onerror = error => reject(error);
+                reader.onerror = reject;
             });
 
             const successCount = queue.filter(i => i.status === 'success').length;
@@ -118,17 +121,15 @@
 
                     <main className="flex-1 flex flex-col justify-center min-h-0">
                         {step === 'upload' && (
-                            <div className="space-y-6">
-                                <div
-                                    onClick={() => fileInputRef.current.click()}
-                                    className="aspect-[4/3] bg-white border-2 border-dashed border-indigo-200 rounded-3xl flex flex-col items-center justify-center gap-4 cursor-pointer hover:bg-indigo-50 transition-all active:scale-95 mx-2 shadow-sm"
-                                >
-                                    <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center">
-                                        <i className="fas fa-camera text-2xl"></i>
-                                    </div>
-                                    <p className="font-bold text-slate-600">名刺を読み取る</p>
-                                    <p className="text-xs text-slate-400">複数枚まとめて選択OK</p>
+                            <div
+                                onClick={() => fileInputRef.current.click()}
+                                className="aspect-[4/3] bg-white border-2 border-dashed border-indigo-200 rounded-3xl flex flex-col items-center justify-center gap-4 cursor-pointer hover:bg-indigo-50 transition-all active:scale-95 mx-2 shadow-sm"
+                            >
+                                <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center">
+                                    <i className="fas fa-camera text-2xl"></i>
                                 </div>
+                                <p className="font-bold text-slate-600">名刺を読み取る</p>
+                                <p className="text-xs text-slate-400">複数枚まとめて選択OK</p>
                             </div>
                         )}
 
@@ -143,7 +144,6 @@
                                         <div className="bg-indigo-600 h-full progress-bar" style={{ width: `${progress}%` }}></div>
                                     </div>
                                 </div>
-
                                 <div className="flex-1 overflow-y-auto space-y-3 pr-1">
                                     {queue.map((item, idx) => (
                                         <div key={item.id} className={`p-3 rounded-xl border flex items-center gap-3 transition-all ${
@@ -154,10 +154,10 @@
                                                 <img src={item.preview} className="w-full h-full object-cover" alt="" />
                                             </div>
                                             <div className="flex-1 min-w-0 text-sm">
-                                                <p className="font-bold truncate">{item.file.name}</p>
-                                                <p className="text-xs text-slate-500 truncate">
+                                                <p className="font-bold truncate">{item.data?.name || item.file.name}</p>
+                                                <p className="text-xs text-slate-500">
                                                     {item.status === 'analyzing' && 'AI処理中...'}
-                                                    {item.status === 'success' && '完了'}
+                                                    {item.status === 'success' && (item.data?.company || '完了')}
                                                     {item.status === 'error' && '失敗'}
                                                     {item.status === 'waiting' && '待機中'}
                                                 </p>
@@ -180,9 +180,8 @@
                                     <i className="fas fa-check-double"></i>
                                 </div>
                                 <div className="px-4">
-                                    <h2 className="text-2xl font-bold text-slate-800">送信完了！</h2>
-                                    <p className="text-slate-500 mt-2">{successCount} 枚の名刺を送信しました。</p>
-                                    <p className="text-slate-400 text-xs mt-2">スプレッドシートへの反映に数秒かかる場合があります。</p>
+                                    <h2 className="text-2xl font-bold text-slate-800">保存完了！</h2>
+                                    <p className="text-slate-500 mt-2">{successCount} 枚の名刺を登録しました。</p>
                                     {queue.some(i => i.status === 'error') && (
                                         <p className="text-red-400 text-sm mt-1">
                                             {queue.filter(i => i.status === 'error').length} 枚が失敗しました
