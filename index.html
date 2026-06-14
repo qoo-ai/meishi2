@@ -62,9 +62,11 @@
                 try {
                     const base64 = await fileToBase64(item.file);
 
-                    const response = await fetch(GAS_URL, {
+                    // no-corsで送信（GASのCORS制限を回避）
+                    // レスポンスは読めないが、GAS側で処理は完了する
+                    await fetch(GAS_URL, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        mode: 'no-cors',
                         body: JSON.stringify({
                             imageBase64: base64.split(',')[1],
                             mimeType: item.file.type,
@@ -72,13 +74,8 @@
                         })
                     });
 
-                    const result = await response.json();
-
-                    if (result.success) {
-                        updateItemStatus(index, 'success', result.data);
-                    } else {
-                        throw new Error(result.error || '不明なエラー');
-                    }
+                    // no-corsではレスポンスが読めないので送信完了＝成功とみなす
+                    updateItemStatus(index, 'success');
 
                 } catch (error) {
                     console.error("Processing error:", error);
@@ -157,8 +154,13 @@
                                                 <img src={item.preview} className="w-full h-full object-cover" alt="" />
                                             </div>
                                             <div className="flex-1 min-w-0 text-sm">
-                                                <p className="font-bold truncate">{item.data?.name || item.file.name}</p>
-                                                <p className="text-xs text-slate-500 truncate">{item.data?.company || '処理中...'}</p>
+                                                <p className="font-bold truncate">{item.file.name}</p>
+                                                <p className="text-xs text-slate-500 truncate">
+                                                    {item.status === 'analyzing' && 'AI処理中...'}
+                                                    {item.status === 'success' && '完了'}
+                                                    {item.status === 'error' && '失敗'}
+                                                    {item.status === 'waiting' && '待機中'}
+                                                </p>
                                             </div>
                                             <div className="text-lg flex-shrink-0">
                                                 {item.status === 'analyzing' && <i className="fas fa-brain text-indigo-400 animate-pulse"></i>}
@@ -178,8 +180,9 @@
                                     <i className="fas fa-check-double"></i>
                                 </div>
                                 <div className="px-4">
-                                    <h2 className="text-2xl font-bold text-slate-800">保存完了！</h2>
-                                    <p className="text-slate-500 mt-2">{successCount} 枚の名刺をシートに追加しました。</p>
+                                    <h2 className="text-2xl font-bold text-slate-800">送信完了！</h2>
+                                    <p className="text-slate-500 mt-2">{successCount} 枚の名刺を送信しました。</p>
+                                    <p className="text-slate-400 text-xs mt-2">スプレッドシートへの反映に数秒かかる場合があります。</p>
                                     {queue.some(i => i.status === 'error') && (
                                         <p className="text-red-400 text-sm mt-1">
                                             {queue.filter(i => i.status === 'error').length} 枚が失敗しました
